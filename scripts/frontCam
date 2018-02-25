@@ -1,0 +1,18 @@
+#! /usr/bin/env python
+
+import rospy
+import thread
+import nodes.frontCam 
+
+if __name__ == '__main__' :
+    rospy.init_node("DFC")
+    #i=0
+    nf = nodes.frontCam
+    #thread.start_new_thread(nf.getVideo, ())
+    #print "Dude"
+    
+    #while True :
+    #    a = 1
+    nf.getVideo()
+    #nf.out.release()
+

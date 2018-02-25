@@ -1,0 +1,8 @@
+#! /usr/bin/env python
+
+import rospy
+import nodes.hoover_navData as nd
+
+if __name__ == '__main__' :
+    
+    get_nav = nd.navdata_handle()

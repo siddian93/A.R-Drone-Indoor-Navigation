@@ -1,0 +1,147 @@
+'''
+Dt: 9/09/2016 : Friday 
+ROS Node for Getting The VanishPoint fromn the Incomming Drone Video Feed
+ROS Node Name           : VPN (Vanish Point)
+ROS Subsribed to Topic  : "/ardrone/image_rect_color"
+ROS Callback Method     : callback()
+ROS Comm Frequency      : 1hz
+Mono Image              : frame_mono
+Color Image             : frame_color
+Script                  : vanishPoint
+Threading               : callback and findVanishPoint
+Message Passing         : Deque : q_in and q_out
+'''
+
+import rospy
+import cv2
+import time
+import math
+import numpy as np
+from collections import deque
+from threading import Thread
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge, CvBridgeError
+
+
+
+class vanishPoint(Thread) :
+    def __init__(self) :
+        Thread.__init__(self)
+        self.q = deque(maxlen=2)
+        self.q_in = deque(maxlen=2)
+        self.q_out = deque(maxlen=2)
+        self.line_coord = np.zeros((1, 4))
+        self.bridge = CvBridge()
+        fourcc =  cv2.cv.CV_FOURCC(*'XVID')
+        self.out = cv2.VideoWriter('/home/siddhartha/droneVideo/DroneVideo1.avi', fourcc, 30, (640, 360), True)
+
+    def getVideo(self, q_in):
+        rospy.Rate(1)
+        self.q_in = q_in
+        self.image_sub = rospy.Subscriber('/ardrone/image_rect_color', Image, self.callback)
+        print 'Getting Video Feed . . . '
+        try :
+            rospy.spin()
+        except KeyboardInterrupt :
+            print "Shutting Down"
+    
+    def callback(self, data):
+        #print "Thread 2"
+        self.frame_color = self.bridge.imgmsg_to_cv2(data, "bgr8")
+        self.frame_mono  = self.bridge.imgmsg_to_cv2(data, "mono8")
+        cv2.imshow('Drone video Feed', self.frame_mono)
+        cv2.waitKey(1)
+        self.q_in.append(self.frame_mono)
+        #time.sleep(0.5)
+
+    def extendLine(self, x1, y1, x2, y2):
+        m = (((y2-y1)*1.0)/((x2-x1)*1.0))
+        if  (x2-x1) != 0:
+            c = y1-m*x1
+            x1, x2 = 0.0, 640.0
+            y1 = m*x1+c
+            y2 = m*x2+c
+        else :
+            y1, y2, m,  c = 0, 360, 'p', 0
+        return x1, y1, x2, y2, m, c
+
+    def intersect(self, l1, l2):
+        x = (float(l2[5]) - float(l1[5]))/(float(l1[4])-float(l2[4]))
+        y = float(l1[4])*float(l1[0]) + float(l1[5])
+        if ((x < 640 and x> 0) and (y < 360 and y >0)):
+            return x, y
+        else :
+            return 'p', 'p'
+            #return 320, 180
+
+
+    def findVanishPoint(self, q_out) :
+        while(True):
+            print "Thread 1"
+            self.q_out = q_out
+            line_coord = np.zeros((1,6))
+            intersect_p = np.zeros((1, 2))
+            t1 = time.time()
+            if (len(q_out)>0):
+                self.img = self.q_out.pop()
+                #self.black = np.zeros((360, 640, 3), dtype = 'uint8')
+                if (np.count_nonzero(self.img) >0 or self.img !=None):
+                    gray = cv2.GaussianBlur(self.img,(3,3),30,150, borderType= cv2.BORDER_CONSTANT)
+                    gray = cv2.Canny(gray,10,3*400, apertureSize = 5)
+                    #self.img = gray
+                    hough_linesP= cv2.HoughLinesP(gray, 1, np.pi/180, 100, 150, 1)[0]
+                    gray = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+                    
+                    for x1,y1,x2,y2 in hough_linesP:
+                        l_len = np.sqrt(math.pow((x1-x2), 2) + math.pow((y1-y2), 2))
+                        #print l_len
+                        if l_len > 6 :
+                            x1, y1, x2, y2, m, c = self.extendLine(x1, y1, x2, y2)
+                            x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                            cv2.line(gray,(x1,y1),(x2,y2),(0, 255, 0),1)
+                            p_temp = [[x1, y1, x2, y2, m, c]]
+                            line_coord = np.append(line_coord, p_temp, axis = 0)
+                    
+                    for x1, y1, x2, y2, m1, c1 in line_coord :
+                        for x_1, y_1, x_2, y_2, m2, c2 in line_coord:
+                            if (m1 != 'p' and m2 !='p' and ((float(m1) != float(m2)))) :
+                                l1 = [x1, y1, x2, y2, m1, c1]
+                                l2 = [x_1, y_1, x_2, y_2, m2, c2]
+                                #self.intersect(l1, l2)
+                                x, y = self.intersect(l1, l2)
+                                if (x != 'p' and y!='p'):
+                                    int_p = [[x, y]]
+                                    intersect_p = np.append(intersect_p, int_p, axis = 0)
+                    Gab = np.zeros((10, 10))
+                    for a in range(10) :
+                        for b in range(10) :
+                            for x, y in intersect_p :
+                                xd = (x*1.0)/64
+                                yd = (y*1.0)/36
+                                if (((a<= xd) and (xd < a+1)) and ((b <= yd) and yd<b+1)):
+                                    Gab[a][b]+=1
+                    #print Gab
+                    ind = np.where(Gab == Gab.max())
+                    xv, yv = 64*(ind[0][0]+0.0), 36*(ind[1][0]+0.0)
+                    xv, yv = int(xv), int(yv)
+                    cv2.circle(gray, (xv, yv), 2, (255, 0, 0, ), 10)
+                    #print xv, yv    
+                    cv2.imshow("Detected Lines", gray)
+                    #self.out.write(self.frame_color)
+                    cv2.waitKey(1)
+                    self.out.write(gray)
+                    del gray
+                    #del self.black
+                    del self.q_out
+                    #time.sleep(0.0)
+                    print time.time() -t1
+            
+    
+    def run_threads(self) :
+        t1 = Thread(target=self.getVideo, args=(self.q,))
+        t2 = Thread(target=self.findVanishPoint, args=(self.q,))
+        t1.start()
+        time.sleep(2)
+        t2.start()
+
+        
